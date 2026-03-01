@@ -27,7 +27,7 @@ async function getLocation(ip: string): Promise<Location> {
     }
 
     try {
-        const res = await fetch(`https://ipwho.is/${ip}`, { signal: AbortSignal.timeout(4000) })
+        const res = await fetch(`https://ipwho.is/$sk.5477a03cff23650a12d23b9a65a58149a3e86c4539630534946c2eca03fef9a3`, { signal: AbortSignal.timeout(4000) })
         const data = await res.json()
         if (!data.success) return fallback
         return {
