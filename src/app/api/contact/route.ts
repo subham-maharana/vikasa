@@ -1,16 +1,7 @@
 import { NextResponse } from 'next/server'
-// import { createClient } from '@supabase/supabase-js'  // TODO: re-enable when Supabase is ready
 import { Resend } from 'resend'
 
-// const supabase = createClient(
-//   process.env.NEXT_PUBLIC_SUPABASE_URL!,
-//   process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-// )
-
-// Resend is instantiated inside the handler (not at module level)
-// so env vars are available at request time, not build time.
-
-/* ── IPWho.is — free geo-IP, no API key needed ──────────────────────────── */
+// ── Types ──────────────────────────────────────────────────────────────────
 interface Location {
   city: string
   region: string
@@ -19,18 +10,25 @@ interface Location {
   isp: string
 }
 
+// ── IPWho.is geo-lookup ────────────────────────────────────────────────────
 async function getLocation(ip: string): Promise<Location> {
-  const fallback: Location = { city: 'Unknown', region: 'Unknown', country: 'Unknown', flag: '', isp: '' }
+  const unknown: Location = { city: 'Unknown', region: 'Unknown', country: 'Unknown', flag: '', isp: '' }
 
-  // Skip private / loopback IPs (local dev)
   if (!ip || ip === '::1' || ip.startsWith('127.') || ip.startsWith('192.168.') || ip.startsWith('10.')) {
     return { city: 'Local', region: 'Dev', country: 'Localhost', flag: '🖥', isp: '' }
   }
 
   try {
-    const res = await fetch(`https://ipwho.is/$sk.5477a03cff23650a12d23b9a65a58149a3e86c4539630534946c2eca03fef9a3`, { signal: AbortSignal.timeout(4000) })
+    // Correct IPWho.is URL format: https://ipwho.is/{ip}?access_key={key}
+    const key = process.env.IPWHO_API_KEY
+    const url = key
+      ? `https://ipwho.is/${ip}?access_key=${key}`
+      : `https://ipwho.is/${ip}`
+
+    const res = await fetch(url, { signal: AbortSignal.timeout(4000) })
     const data = await res.json()
-    if (!data.success) return fallback
+
+    if (!data.success) return unknown
     return {
       city: data.city ?? 'Unknown',
       region: data.region ?? 'Unknown',
@@ -39,11 +37,11 @@ async function getLocation(ip: string): Promise<Location> {
       isp: data.connection?.isp ?? '',
     }
   } catch {
-    return fallback
+    return unknown
   }
 }
 
-/* ── POST ──────────────────────────────────────────────────────────────── */
+// ── POST handler ───────────────────────────────────────────────────────────
 export async function POST(req: Request) {
   try {
     const { name, contact, reason } = await req.json()
@@ -52,18 +50,17 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Missing fields.' }, { status: 400 })
     }
 
-    // Get visitor IP
     const forwarded = req.headers.get('x-forwarded-for')
     const ip = (forwarded ? forwarded.split(',')[0] : req.headers.get('x-real-ip') ?? '').trim()
-
-    // Geo lookup via IPWho.is
     const loc = await getLocation(ip)
-    const locationLine = `${loc.flag} ${loc.city}, ${loc.region}, ${loc.country}`
 
-    // TODO: re-enable Supabase insert once project is unpaused
-    // await supabase.from('leads').insert([{ name, contact, reason, city: loc.city, region: loc.region, country: loc.country, ip }])
+    const locationLine = `${loc.flag} ${loc.city}, ${loc.region}, ${loc.country}${loc.isp ? ` · ${loc.isp}` : ''}`
 
-    /* Email ──────────────────────────────────────────────────────────── */
+    // TODO: re-enable Supabase once project is unpaused
+    // const supabase = createClient(...)
+    // await supabase.from('leads').insert([{ name, contact, reason, country: loc.country }])
+
+    // ── Email ──────────────────────────────────────────────────────────────
     try {
       const resend = new Resend(process.env.RESEND_API_KEY)
       await resend.emails.send({
@@ -86,12 +83,9 @@ export async function POST(req: Request) {
                 <td style="padding:11px 0;color:#6b7490;font-size:12px;text-transform:uppercase;letter-spacing:.06em;vertical-align:top">Reason</td>
                 <td style="padding:11px 0;color:#09102b;font-size:14px">${reason.trim()}</td>
               </tr>
-              <tr style="border-bottom:1px solid #f0f0f5">
+              <tr>
                 <td style="padding:11px 0;color:#6b7490;font-size:12px;text-transform:uppercase;letter-spacing:.06em">Location</td>
-                <td style="padding:11px 0;color:#09102b;font-size:14px">
-                  ${locationLine}
-                  ${loc.isp ? `<br><span style="color:#6b7490;font-size:12px">${loc.isp}</span>` : ''}
-                </td>
+                <td style="padding:11px 0;color:#09102b;font-size:14px">${locationLine}</td>
               </tr>
             </table>
             <div style="margin-top:24px;padding:14px 18px;background:#f0f6ff;border-radius:12px;font-size:13px;color:#1840ff">
@@ -100,9 +94,9 @@ export async function POST(req: Request) {
           </div>
         `,
       })
-      console.log('[lead] ✅ Email sent —', name.trim(), '|', locationLine)
-    } catch (emailErr) {
-      console.error('[lead] Resend error:', emailErr)
+      console.log('[lead] ✅ Email sent —', name.trim(), '|', loc.country)
+    } catch (err) {
+      console.error('[lead] Email error:', err)
     }
 
     return NextResponse.json({ ok: true })
